@@ -13,11 +13,16 @@ load_dotenv()
 
 # Configuration
 # Замените эти значения на свои, если не используете .env файл
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7450359157:AAE0te43JU4X6B5E4H-NP-PFQqpJM0ryei4")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8614195963:AAGVIVKz4eR_7kbiBlH3GfV8VcVCNruUV7k")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "6150541410")
-# Список из 10 адресов через запятую (можно вписать сюда или в .env)
-MONITORED_ADDRESSES_RAW = os.getenv("MONITORED_ADDRESSES", "")
-MONITORED_ADDRESSES = [addr.strip().lower() for addr in MONITORED_ADDRESSES_RAW.split(",") if addr.strip()]
+# Список адресов (Топ-4 ETC)
+MONITORED_ADDRESSES_RAW = os.getenv("MONITORED_ADDRESSES", 
+    "0x13CDee29cAd8e11523095900e2195088Ed6d02Ad,"
+    "0x00cd5Bf5bFB8fd1d139eF486ce35B8dfc00aDE91,"
+    "0x1f1C8b291B1C9cce6e7C1bee8F660f811Dcd5B94,"
+    "0x8793291670607dDF746A49B6B3faf6627A5E494f"
+)
+MONITORED_ADDRESSES = {addr.strip().lower() for addr in MONITORED_ADDRESSES_RAW.split(",") if addr.strip()}
 
 ETC_RPC_URL = os.getenv("ETC_RPC_URL", "https://etc.rivet.link")
 # Порог в 10,000 монет (рекомендуется для сканирования ВСЕХ адресов)
@@ -73,9 +78,11 @@ async def monitor_blocks():
                         to_addr = tx['to'].lower() if tx['to'] else ""
                         value_etc = w3.from_wei(tx['value'], 'ether')
 
-                        # Проверяем сумму транзакции (для ВСЕХ адресов в сети)
-                        if value_etc >= THRESHOLD_ETC:
-                            logger.info(f"🔥 Крупная транзакция: {tx['hash'].hex()} | {value_etc} ETC.")
+                        # Проверяем, участвует ли один из отслеживаемых кошельков (как отправитель или получатель)
+                        is_target = from_addr in MONITORED_ADDRESSES or to_addr in MONITORED_ADDRESSES
+
+                        if is_target and value_etc >= THRESHOLD_ETC:
+                            logger.info(f"🔔 Транзакция по кошельку: {tx['hash'].hex()} | {value_etc} ETC.")
                             await send_notification(tx['hash'].hex(), from_addr, to_addr, value_etc)
 
                 last_block = current_block
