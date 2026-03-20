@@ -1,0 +1,107 @@
+import os
+import asyncio
+import logging
+from typing import List
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from web3 import Web3
+from dotenv import load_dotenv
+
+# Load settings from .env file
+load_dotenv()
+
+# Configuration
+# Замените эти значения на свои, если не используете .env файл
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7450359157:AAE0te43JU4X6B5E4H-NP-PFQqpJM0ryei4")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "6150541410")
+# Список из 10 адресов через запятую (можно вписать сюда или в .env)
+MONITORED_ADDRESSES_RAW = os.getenv("MONITORED_ADDRESSES", "")
+MONITORED_ADDRESSES = [addr.strip().lower() for addr in MONITORED_ADDRESSES_RAW.split(",") if addr.strip()]
+
+ETC_RPC_URL = os.getenv("ETC_RPC_URL", "https://etc.rivet.link")
+# Порог в 10,000 монет (рекомендуется для сканирования ВСЕХ адресов)
+THRESHOLD_ETC = float(os.getenv("THRESHOLD_ETC", 5000.0))
+
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+# Initialize Web3
+w3 = Web3(Web3.HTTPProvider(ETC_RPC_URL))
+
+# Initialize Bot and Dispatcher
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+dp = Dispatcher()
+
+async def send_notification(tx_hash, from_addr, to_addr, value):
+    """Sends a Telegram notification to the admin chat ID."""
+    message = (
+        f"🚨 **Крупная транзакция в ETC!** 🚨\n\n"
+        f"💳 **От:** `{from_addr}`\n"
+        f"📥 **Кому:** `{to_addr}`\n"
+        f"💰 **Сумма:** {value:.2f} ETC\n"
+        f"🔗 **Хэш:** [Посмотреть в Blockscout](https://etc.blockscout.com/tx/{tx_hash})"
+    )
+    try:
+        if ADMIN_CHAT_ID:
+            await bot.send_message(ADMIN_CHAT_ID, message, parse_mode="Markdown")
+        else:
+            logger.warning("ADMIN_CHAT_ID not set, skipping notification.")
+    except Exception as e:
+        logger.error(f"Error sending Telegram message: {e}")
+
+async def monitor_blocks():
+    """Background task to poll for new blocks and check transactions."""
+    if not w3.is_connected():
+        logger.error("Failed to connect to ETC RPC.")
+        return
+
+    logger.info("Starting ETC block monitor...")
+    last_block = w3.eth.block_number
+
+    while True:
+        try:
+            current_block = w3.eth.block_number
+            if current_block > last_block:
+                for block_num in range(last_block + 1, current_block + 1):
+                    logger.info(f"Processing block: {block_num}")
+                    block = w3.eth.get_block(block_num, full_transactions=True)
+                    
+                    for tx in block.transactions:
+                        from_addr = tx['from'].lower()
+                        to_addr = tx['to'].lower() if tx['to'] else ""
+                        value_etc = w3.from_wei(tx['value'], 'ether')
+
+                        # Проверяем сумму транзакции (для ВСЕХ адресов в сети)
+                        if value_etc >= THRESHOLD_ETC:
+                            logger.info(f"🔥 Крупная транзакция: {tx['hash'].hex()} | {value_etc} ETC.")
+                            await send_notification(tx['hash'].hex(), from_addr, to_addr, value_etc)
+
+                last_block = current_block
+
+            # Poll every 10 seconds (ETC block time is around 13-15 seconds)
+            await asyncio.sleep(10)
+        except Exception as e:
+            logger.error(f"An error occurred in the monitor loop: {e}")
+            await asyncio.sleep(5)
+
+@dp.message(Command("start"))
+async def start_cmd(message: types.Message):
+    """Handle /start command."""
+    await message.reply(f"Бот запущен. Мониторим ETC адреса (Порог: {THRESHOLD_ETC} ETC).")
+
+async def main():
+    """Main function to launch both the bot and the monitoring task."""
+    # Run the monitoring loop as a background task
+    asyncio.create_task(monitor_blocks())
+    
+    # Start bot polling
+    logger.info("Starting bot polling...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped.")

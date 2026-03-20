@@ -1,0 +1,4 @@
+aiogram
+web3
+python-dotenv
+asyncio
